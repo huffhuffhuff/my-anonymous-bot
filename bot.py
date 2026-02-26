@@ -1,79 +1,70 @@
 import asyncio
 import logging
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-# Добавь эти импорты в самый верх
-from aiohttp import web
-import threading
+from aiohttp import web  # для health check (Railway)
 
-# Простой веб-сервер для проверок Railway
-async def handle(request):
-    return web.Response(text="Bot is running!")
+# Токен и ID админа из переменных окружения (или вставь вручную для теста)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8772167663:AAHBNvA2GTT08sqDyeXgUcPOz_g5fD7q2rg")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 998894037))  # замени 123456789 на свой ID
 
-async def run_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 8080)
-    await site.start()
-    print("Health check server started on port 8080")
-
-# Запускаем веб-сервер в фоне при старте бота
-async def main():
-    # Запускаем health check сервер
-    await run_web_server()
-    print("Бот запущен...")
-    await dp.start_polling(bot)
-
-import os
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-
-if not BOT_TOKEN or not ADMIN_ID:
-    raise ValueError("Не заданы переменные окружения BOT_TOKEN или ADMIN_ID")
-
-# Включаем логирование, чтобы видеть ошибки
 logging.basicConfig(level=logging.INFO)
 
-# Создаем объекты бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 # --- Машина состояний ---
-# Будем использовать одно состояние: ожидание текста сообщения от пользователя
 class Form(StatesGroup):
-    waiting_for_message = State()  # пользователь должен прислать текст
+    waiting_for_message = State()  # ждём любое сообщение (текст, фото, стикер...)
 
-# Словарь для хранения связи "сообщение админа" -> "пользователь"
-# Когда админ отвечает на сообщение, мы будем искать, кому оно предназначалось
-# Ключ: ID сообщения от админа (то, которое бот отправил админу)
-# Значение: ID пользователя, который написал исходное сообщение
+# Хранилище: сообщение админа -> ID пользователя
 admin_messages = {}
 
 # --- Команда /start ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    # Приветственное сообщение
     await message.answer(
-        "привет! напиши сообщение для меня на любую тему.\n"
+        "привет! напиши сообщение для меня с любой темой.\n"
         "есть возможность выбора -- остаться анонимным или отправить публично."
     )
-    # Устанавливаем состояние "ожидание сообщения"
     await state.set_state(Form.waiting_for_message)
 
-# --- Обработка текстовых сообщений, когда бот ждет сообщение от пользователя ---
+# --- УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК: ловим ВСЁ, когда ждём сообщение ---
 @dp.message(Form.waiting_for_message)
-async def process_user_message(message: types.Message, state: FSMContext):
-    # Сохраняем текст сообщения в данных состояния
-    await state.update_data(user_text=message.text, user_id=message.from_user.id)
+async def process_user_media(message: types.Message, state: FSMContext):
+    # Сохраняем ID пользователя
+    data = {"user_id": message.from_user.id}
     
-    # Создаем inline-кнопки для выбора способа отправки
+    # Определяем тип контента и сохраняем нужную информацию
+    if message.text:
+        data["type"] = "text"
+        data["content"] = message.text
+    elif message.photo:
+        data["type"] = "photo"
+        # Берём самое большое фото (последнее в массиве)
+        data["file_id"] = message.photo[-1].file_id
+        data["caption"] = message.caption or ""  # подпись к фото, если есть
+    elif message.sticker:
+        data["type"] = "sticker"
+        data["file_id"] = message.sticker.file_id
+    elif message.animation:
+        data["type"] = "animation"  # GIF
+        data["file_id"] = message.animation.file_id
+        data["caption"] = message.caption or ""
+    else:
+        # Если тип не поддерживается
+        await message.answer("можно отправить лишь текст, фото, стикер или гиф =[")
+        return
+    
+    # Сохраняем данные в состояние
+    await state.update_data(**data)
+    
+    # Кнопки выбора
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="анонимно", callback_data="send_anon"),
@@ -82,83 +73,116 @@ async def process_user_message(message: types.Message, state: FSMContext):
     ])
     
     await message.answer(
-        "как вы хотите прислать сообщение?",
+        "как вы хотите оставить сообщение?",
         reply_markup=keyboard
     )
-    # Состояние не меняем, пока не получим ответ на кнопку
 
-# --- Обработка нажатий на кнопки ---
+# --- Обработка нажатий кнопок ---
 @dp.callback_query(F.data.startswith("send_"))
 async def process_send_choice(callback: types.CallbackQuery, state: FSMContext):
-    # Получаем сохраненные данные (текст и id пользователя)
     data = await state.get_data()
-    user_text = data.get("user_text")
     user_id = data.get("user_id")
+    content_type = data.get("type")
     
-    if not user_text:
-        await callback.answer("ошибка :( сообщение не найдено. попробуйте снова.")
+    if not user_id or not content_type:
+        await callback.answer("данные утеряны =[ начните снова со /start")
         await state.clear()
         return
     
-    # Определяем, анонимно или публично
-    if callback.data == "send_anon":
-        # Анонимно: только текст
-        admin_text = f"анонимное сообщение:\n{user_text}"
-    else:
-        # Публично: пытаемся получить юзернейм, если нет — имя и фамилию
-        user = callback.from_user
+    # Формируем информацию об отправителе
+    user = callback.from_user
+    if callback.data == "send_public":
         if user.username:
-            sender_info = f"@{user.username}"
+            sender = f"@{user.username}"
         else:
-            sender_info = f"{user.first_name or ''} {user.last_name or ''}".strip()
-        admin_text = f"сообщение от {sender_info}:\n{user_text}"
+            sender = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        header = f"сообщение {sender}:"
+    else:
+        header = "анонимное сообщение:"
     
-    # Отправляем сообщение админу
-    sent_message = await bot.send_message(ADMIN_ID, admin_text)
+    # Отправляем админу в зависимости от типа
+    try:
+        if content_type == "text":
+            sent = await bot.send_message(
+                ADMIN_ID,
+                f"{header}\n\n{data['content']}"
+            )
+        elif content_type == "photo":
+            sent = await bot.send_photo(
+                ADMIN_ID,
+                photo=data["file_id"],
+                caption=f"{header}\n\n{data['caption']}".strip()
+            )
+        elif content_type == "sticker":
+            sent = await bot.send_sticker(
+                ADMIN_ID,
+                sticker=data["file_id"]
+            )
+            # Для стикеров отдельно отправим заголовок (нельзя прикрепить к стикеру)
+            await bot.send_message(ADMIN_ID, header)
+        elif content_type == "animation":  # GIF
+            sent = await bot.send_animation(
+                ADMIN_ID,
+                animation=data["file_id"],
+                caption=f"{header}\n\n{data['caption']}".strip()
+            )
+        else:
+            await callback.answer("неизвестный тип сообщения")
+            return
+        
+        # Сохраняем связь: сообщение админа -> пользователь
+        admin_messages[sent.message_id] = user_id
+        
+        # Уведомляем пользователя
+        await callback.message.edit_text("отправлено! ожидайте ответа =]")
+        
+    except Exception as e:
+        logging.error(f"Ошибка отправки админу: {e}")
+        await callback.message.edit_text("ошибка при отправке. попробуйте позже.")
     
-    # Запоминаем, что это сообщение админа связано с пользователем
-    admin_messages[sent_message.message_id] = user_id
-    
-    # Уведомляем пользователя об успехе
-    await callback.message.edit_text("отправлено! ожидайте ответа =]")
-    
-    # Очищаем состояние, т.к. диалог завершен (но пользователь может снова написать)
     await state.clear()
-    
-    # Обязательно отвечаем на callback, чтобы убрать "часики" на кнопке
     await callback.answer()
 
-# --- Обработка ответов от администратора ---
-@dp.message(F.reply_to_message & F.from_user.id == ADMIN_ID)
+# --- Обработка ответов админа (как и раньше) ---
+@dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
 async def reply_to_user(message: types.Message):
-    # Проверяем, что админ ответил на какое-то сообщение
-    replied_msg = message.reply_to_message
-    
-    # Ищем, не связано ли это сообщение с каким-либо пользователем
-    user_id = admin_messages.get(replied_msg.message_id)
+    replied = message.reply_to_message
+    user_id = admin_messages.get(replied.message_id)
     
     if user_id:
-        # Пересылаем ответ пользователю
         try:
             await bot.send_message(
                 user_id,
-                f"ответ хуфф:\n{message.text}"
+                f"📬 Ответ от администратора:\n{message.text}"
             )
-            await message.reply("отправлено!")
+            await message.reply("ртвет отправлен!")
         except Exception as e:
-            await message.reply(f"не удалось отправить ответ: пользователь заблокировал бота или удалил чат.")
+            await message.reply(f"не удалось отправить: {e}")
     else:
-        await message.reply("это сообщение не связано с пользователем (возможно, бот перезапущен или сообщение устарело).")
+        await message.reply("пользователь не найден (возможно, бот перезапущен).")
 
-# --- Обработка всех остальных сообщений (например, если пользователь отправил что-то, пока не в состоянии) ---
+# --- Обработка всего остального (если не в состоянии) ---
 @dp.message()
-async def handle_other_messages(message: types.Message):
-    # Если пользователь пишет что-то не по сценарию, напоминаем о /start
-    await message.answer("пожалуйста, начните с команды /start !")
+async def fallback(message: types.Message):
+    await message.answer("начните с команды /start")
 
-# --- Запуск бота ---
+# --- Health check для Railway (веб-сервер) ---
+async def handle_health(request):
+    return web.Response(text="Bot is running!")
+
+async def run_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print("✅ Health check server started on port 8080")
+
+# --- Запуск ---
 async def main():
-    print("Бот запущен...")
+    await run_web_server()
+    print("Бот запущен и готов к работе...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
