@@ -6,12 +6,37 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+# Добавь эти импорты в самый верх
+from aiohttp import web
+import threading
 
-# Токен бота (обязательно замените на свой!)
-BOT_TOKEN = "8772167663:AAHBNvA2GTT08sqDyeXgUcPOz_g5fD7q2rg"
+# Простой веб-сервер для проверок Railway
+async def handle(request):
+    return web.Response(text="Bot is running!")
 
-# ID администратора, которому будут приходить сообщения (ваш ID)
-ADMIN_ID = 998894037  # например, 123456789
+async def run_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print("Health check server started on port 8080")
+
+# Запускаем веб-сервер в фоне при старте бота
+async def main():
+    # Запускаем health check сервер
+    await run_web_server()
+    print("Бот запущен...")
+    await dp.start_polling(bot)
+
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
+if not BOT_TOKEN or not ADMIN_ID:
+    raise ValueError("Не заданы переменные окружения BOT_TOKEN или ADMIN_ID")
 
 # Включаем логирование, чтобы видеть ошибки
 logging.basicConfig(level=logging.INFO)
