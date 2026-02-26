@@ -168,10 +168,9 @@ async def reply_to_user(message: types.Message):
     replied = message.reply_to_message
     replied_id = str(replied.message_id)
     
-    print(f"админ ответил на сообщение ID: {replied_id}")
-    print(f"словарь admin_messages: {admin_messages}")
+    print(f"🔵 Админ ответил на сообщение ID: {replied_id}")
+    print(f"📚 Словарь admin_messages: {admin_messages}")
     
-    # Ищем пользователя по ID сообщения
     user_id = admin_messages.get(replied_id)
     
     if not user_id:
@@ -223,11 +222,9 @@ async def reply_to_user(message: types.Message):
             await message.reply("этот тип сообщений пока не поддерживается")
             return
         
-        # Удаляем использованную связь
-        if replied_id in admin_messages:
-            del admin_messages[replied_id]
-            save_admin_messages(admin_messages)
-            print(f"удалена связь для сообщения {replied_id}")
+        # Связь НЕ удаляем — можно отвечать бесконечно
+        # admin_messages.pop(replied_id, None)
+        # save_admin_messages(admin_messages)
         
         await message.reply("✅ Ответ отправлен!")
         
