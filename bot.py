@@ -143,23 +143,76 @@ async def process_send_choice(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
-# --- Обработка ответов админа (как и раньше) ---
+# --- УНИВЕРСАЛЬНЫЙ обработчик ответов админа (текст, фото, стикер, GIF) ---
 @dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
 async def reply_to_user(message: types.Message):
     replied = message.reply_to_message
     user_id = admin_messages.get(replied.message_id)
     
-    if user_id:
-        try:
+    if not user_id:
+        await message.reply("пользователь не найден (возможно, бот перезапущен).")
+        return
+    
+    try:
+        # Отправляем ответ в зависимости от типа сообщения админа
+        if message.text:
             await bot.send_message(
                 user_id,
-                f"📬 Ответ от администратора:\n{message.text}"
+                f"ответ от хуфф:\n{message.text}"
             )
-            await message.reply("ртвет отправлен!")
-        except Exception as e:
-            await message.reply(f"не удалось отправить: {e}")
-    else:
-        await message.reply("пользователь не найден (возможно, бот перезапущен).")
+        elif message.photo:
+            # Отправляем фото с подписью
+            await bot.send_photo(
+                user_id,
+                photo=message.photo[-1].file_id,
+                caption=f"ответ от хуфф:\n{message.caption or ''}"
+            )
+        elif message.sticker:
+            # Отправляем стикер (без текста, только стикер)
+            await bot.send_sticker(
+                user_id,
+                sticker=message.sticker.file_id
+            )
+            # Если есть подпись к стикеру (редко, но бывает)
+            if message.caption:
+                await bot.send_message(user_id, f"📬 {message.caption}")
+        elif message.animation:
+            # Отправляем GIF
+            await bot.send_animation(
+                user_id,
+                animation=message.animation.file_id,
+                caption=f"ответ от хуфф:\n{message.caption or ''}"
+            )
+        elif message.video:
+            # На всякий случай добавим поддержку видео
+            await bot.send_video(
+                user_id,
+                video=message.video.file_id,
+                caption=f"ответ от хуфф:\n{message.caption or ''}"
+            )
+        elif message.voice:
+            # И голосовых
+            await bot.send_voice(
+                user_id,
+                voice=message.voice.file_id
+            )
+        elif message.document:
+            # И документов
+            await bot.send_document(
+                user_id,
+                document=message.document.file_id,
+                caption=f"ответ от хуфф:\n{message.caption or ''}"
+            )
+        else:
+            await message.reply("этот тип сообщений пока не поддерживается для ответа =[")
+            return
+        
+        # Подтверждение админу
+        await message.reply("ответ отправлен!")
+        
+    except Exception as e:
+        logging.error(f"Ошибка отправки ответа: {e}")
+        await message.reply(f"не удалось отправить:[ {e}")
 
 # --- Обработка всего остального (если не в состоянии) ---
 @dp.message()
