@@ -1,6 +1,23 @@
 import asyncio
 import logging
 import os
+import json
+import os
+
+ADMIN_MESSAGES_FILE = "admin_messages.json"
+
+def load_admin_messages():
+    if os.path.exists(ADMIN_MESSAGES_FILE):
+        with open(ADMIN_MESSAGES_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_admin_messages():
+    with open(ADMIN_MESSAGES_FILE, "w") as f:
+        json.dump(admin_messages, f)
+
+# Загружаем при старте
+admin_messages = load_admin_messages()
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -132,6 +149,7 @@ async def process_send_choice(callback: types.CallbackQuery, state: FSMContext):
         
         # Сохраняем связь: сообщение админа -> пользователь
         admin_messages[sent.message_id] = user_id
+        save_admin_messages()
         
         # Уведомляем пользователя
         await callback.message.edit_text("отправлено! ожидайте ответа =]")
@@ -147,72 +165,54 @@ async def process_send_choice(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
 async def reply_to_user(message: types.Message):
     replied = message.reply_to_message
-    user_id = admin_messages.get(replied.message_id)
+    replied_id = replied.message_id
+    
+    print(f"🔵 Админ ответил на сообщение ID: {replied_id}")
+    print(f"📚 Словарь admin_messages: {admin_messages}")
+    
+    user_id = admin_messages.get(str(replied_id))  # JSON хранит ключи как строки
     
     if not user_id:
         await message.reply("пользователь не найден (возможно, бот перезапущен).")
         return
     
     try:
-        # Отправляем ответ в зависимости от типа сообщения админа
+        # Отправляем ответ в зависимости от типа
         if message.text:
             await bot.send_message(
-                user_id,
+                int(user_id),
                 f"ответ от хуфф:\n{message.text}"
             )
         elif message.photo:
-            # Отправляем фото с подписью
             await bot.send_photo(
-                user_id,
+                int(user_id),
                 photo=message.photo[-1].file_id,
                 caption=f"ответ от хуфф:\n{message.caption or ''}"
             )
         elif message.sticker:
-            # Отправляем стикер (без текста, только стикер)
             await bot.send_sticker(
-                user_id,
+                int(user_id),
                 sticker=message.sticker.file_id
             )
-            # Если есть подпись к стикеру (редко, но бывает)
-            if message.caption:
-                await bot.send_message(user_id, f"📬 {message.caption}")
         elif message.animation:
-            # Отправляем GIF
             await bot.send_animation(
-                user_id,
+                int(user_id),
                 animation=message.animation.file_id,
                 caption=f"ответ от хуфф:\n{message.caption or ''}"
             )
-        elif message.video:
-            # На всякий случай добавим поддержку видео
-            await bot.send_video(
-                user_id,
-                video=message.video.file_id,
-                caption=f"ответ от хуфф:\n{message.caption or ''}"
-            )
-        elif message.voice:
-            # И голосовых
-            await bot.send_voice(
-                user_id,
-                voice=message.voice.file_id
-            )
-        elif message.document:
-            # И документов
-            await bot.send_document(
-                user_id,
-                document=message.document.file_id,
-                caption=f"ответ от хуфф:\n{message.caption or ''}"
-            )
         else:
-            await message.reply("этот тип сообщений пока не поддерживается для ответа =[")
+            await message.reply("этот тип пока не поддерживается")
             return
         
-        # Подтверждение админу
+        # Удаляем использованную связь и сохраняем
+        del admin_messages[str(replied_id)]
+        save_admin_messages()
+        
         await message.reply("ответ отправлен!")
         
     except Exception as e:
         logging.error(f"Ошибка отправки ответа: {e}")
-        await message.reply(f"не удалось отправить:[ {e}")
+        await message.reply(f"не удалось отправить: {e}")
 
 # --- Обработка всего остального (если не в состоянии) ---
 @dp.message()
